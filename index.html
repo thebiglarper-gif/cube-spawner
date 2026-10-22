@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cube Spawner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
+<style>
+/* Layout: one-screen arcade stage — title bar on top, canvas fills the rest, floor at the bottom */
+:root {
+  --sky-top: #12205a;
+  --sky-bottom: #2a63d8;
+  --floor: #1b3fa8;
+  --ink: #ffffff;
+  --shadow: #050a24;
+  --btn: #36e26b;
+  --btn-2: #ffcf2e;
+  --font-display: "Lilita One", "Arial Black", Impact, sans-serif;
+  --font-body: "Nunito", "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: #2b2f36;
+  color: var(--ink);
+  font-family: var(--font-body);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 14px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: #23262c;
+  position: relative;
+  z-index: 2;
+}
+h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: 2px var(--shadow);
+  paint-order: stroke fill;
+  text-shadow: 0 4px 0 var(--shadow);
+}
+.count {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.controls { display: flex; flex-wrap: wrap; gap: 10px; }
+button {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--ink);
+  border: 3px solid var(--shadow);
+  border-radius: 10px;
+  padding: 10px 18px;
+  background: var(--btn);
+  box-shadow: 0 5px 0 var(--shadow);
+  -webkit-text-stroke: 1px var(--shadow);
+  paint-order: stroke fill;
+  cursor: pointer;
+  transition: transform .08s, box-shadow .08s;
+}
+button:hover { filter: brightness(1.08); }
+button:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--shadow); }
+button:focus-visible { outline: 3px solid var(--btn-2); outline-offset: 3px; }
+#rain { background: var(--btn-2); }
+#clear { background: #ff5a7a; }
+main { position: relative; flex: 1; min-height: 0; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+.hint {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-display);
+  font-size: clamp(1.1rem, 3vw, 1.6rem);
+  text-align: center;
+  opacity: .8;
+  pointer-events: none;
+  text-shadow: 0 3px 0 var(--shadow);
+  padding-inline: 16px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Cube Spawner</h1>
+    <div class="count"><span id="n">0</span> cubes · tap a cube to make it jump</div>
+  </div>
+  <div class="controls">
+    <button id="spawn" type="button">Spawn cube</button>
+    <button id="rain" type="button">Spawn 10</button>
+    <button id="clear" type="button">Clear</button>
+  </div>
+</header>
+<main>
+  <canvas id="c"></canvas>
+  <div class="hint" id="hint">Press Spawn cube!</div>
+</main>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const countEl = document.getElementById('n');
+  const hint = document.getElementById('hint');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const COLORS = ['#7dff00','#00ff00','#00ff7d','#00ffff','#007dff','#0000ff','#7d00ff','#ff00ff',
+    '#ff007d','#ff0000','#ff7d00','#ffff00','#ffffff','#b9b9b9','#4d4d4d','#7d0000','#00c8ff',
+    '#ffb9e6','#ff4b4b','#40e0a0','#ffd84d','#a05cff','#2b2bff','#00a050'];
+  const PATTERNS = ['eyes','square','diamond','cross','circle','stripes','split','triangles','grid','visor','x','dots','frame','star'];
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+
+  let W = 0, H = 0, dpr = 1, floorY = 0;
+  const cubes = [];
+
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = r.width; H = r.height;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    floorY = H - Math.max(60, H * 0.14);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  // ---- cube face drawing (size 1 unit = s, centered at 0,0) ----
+  function drawFace(c, s) {
+    const h = s / 2, lw = Math.max(2, s * 0.07);
+    c.lineJoin = 'miter';
+    c.lineWidth = lw;
+    c.strokeStyle = '#000';
+    // body
+    c.fillStyle = c._p;
+    c.fillRect(-h, -h, s, s);
+    const P = c._p, S = c._s, i = s * 0.18;
+    c.fillStyle = S;
+    switch (c._pat) {
+      case 'eyes':
+        c.fillRect(-h + i, -h + i, s * 0.24, s * 0.24); c.strokeRect(-h + i, -h + i, s * 0.24, s * 0.24);
+        c.fillRect(h - i - s * 0.24, -h + i, s * 0.24, s * 0.24); c.strokeRect(h - i - s * 0.24, -h + i, s * 0.24, s * 0.24);
+        c.fillRect(-h + i, s * 0.12, s - 2 * i, s * 0.14); c.strokeRect(-h + i, s * 0.12, s - 2 * i, s * 0.14);
+        break;
+      case 'square':
+        c.fillRect(-s * 0.25, -s * 0.25, s * 0.5, s * 0.5); c.strokeRect(-s * 0.25, -s * 0.25, s * 0.5, s * 0.5);
+        c.fillStyle = P; c.fillRect(-s * 0.1, -s * 0.1, s * 0.2, s * 0.2); c.strokeRect(-s * 0.1, -s * 0.1, s * 0.2, s * 0.2);
+        break;
+      case 'diamond':
+        c.beginPath(); c.moveTo(0, -s * 0.34); c.lineTo(s * 0.34, 0); c.lineTo(0, s * 0.34); c.lineTo(-s * 0.34, 0); c.closePath(); c.fill(); c.stroke();
+        break;
+      case 'cross':
+        c.beginPath();
+        const a = s * 0.12, b = s * 0.36;
+        c.moveTo(-a, -b); c.lineTo(a, -b); c.lineTo(a, -a); c.lineTo(b, -a); c.lineTo(b, a); c.lineTo(a, a);
+        c.lineTo(a, b); c.lineTo(-a, b); c.lineTo(-a, a); c.lineTo(-b, a); c.lineTo(-b, -a); c.lineTo(-a, -a); c.closePath();
+        c.fill(); c.stroke();
+        break;
+      case 'circle':
+        c.beginPath(); c.arc(0, 0, s * 0.3, 0, Math.PI * 2); c.fill(); c.stroke();
+        c.fillStyle = P; c.beginPath(); c.arc(0, 0, s * 0.12, 0, Math.PI * 2); c.fill(); c.stroke();
+        break;
+      case 'stripes':
+        for (let k = 0; k < 3; k++) { const y = -h + s * (0.16 + k * 0.26); c.fillRect(-h, y, s, s * 0.12); c.strokeRect(-h, y, s, s * 0.12); }
+        break;
+      case 'split':
+        c.beginPath(); c.moveTo(-h, -h); c.lineTo(h, -h); c.lineTo(-h, h); c.closePath(); c.fill(); c.stroke();
+        c.fillStyle = '#000'; c.fillRect(s * 0.08, s * 0.08, s * 0.18, s * 0.18);
+        break;
+      case 'triangles':
+        for (const dx of [-1, 1]) { c.beginPath(); c.moveTo(dx * s * 0.08, -s * 0.3); c.lineTo(dx * s * 0.34, -s * 0.3); c.lineTo(dx * s * 0.34, -s * 0.02); c.closePath(); c.fill(); c.stroke(); }
+        c.beginPath(); c.moveTo(-s * 0.3, s * 0.1); c.lineTo(s * 0.3, s * 0.1); c.lineTo(0, s * 0.34); c.closePath(); c.fill(); c.stroke();
+        break;
+      case 'grid':
+        for (let gx = 0; gx < 2; gx++) for (let gy = 0; gy < 2; gy++) {
+          if ((gx + gy) % 2) continue;
+          c.fillRect(-h + gx * h, -h + gy * h, h, h); c.strokeRect(-h + gx * h, -h + gy * h, h, h);
+        }
+        break;
+      case 'visor':
+        c.fillRect(-h + i * 0.6, -s * 0.18, s - i * 1.2, s * 0.22); c.strokeRect(-h + i * 0.6, -s * 0.18, s - i * 1.2, s * 0.22);
+        c.fillStyle = '#fff'; c.fillRect(s * 0.12, -s * 0.13, s * 0.12, s * 0.12);
+        break;
+      case 'x':
+        c.save(); c.strokeStyle = S; c.lineWidth = s * 0.16; c.lineCap = 'butt';
+        c.beginPath(); c.moveTo(-s * 0.3, -s * 0.3); c.lineTo(s * 0.3, s * 0.3); c.moveTo(s * 0.3, -s * 0.3); c.lineTo(-s * 0.3, s * 0.3); c.stroke(); c.restore();
+        break;
+      case 'dots':
+        for (const [dx, dy] of [[-1,-1],[1,-1],[-1,1],[1,1],[0,0]]) { c.beginPath(); c.arc(dx * s * 0.24, dy * s * 0.24, s * 0.09, 0, Math.PI * 2); c.fill(); c.stroke(); }
+        break;
+      case 'frame':
+        c.fillRect(-h, -h, s, s); c.fillStyle = P; c.fillRect(-h + i, -h + i, s - 2 * i, s - 2 * i); c.strokeRect(-h + i, -h + i, s - 2 * i, s - 2 * i);
+        c.fillStyle = '#000'; c.fillRect(-s * 0.2, -s * 0.12, s * 0.12, s * 0.12); c.fillRect(s * 0.08, -s * 0.12, s * 0.12, s * 0.12);
+        break;
+      case 'star': {
+        c.beginPath();
+        for (let k = 0; k < 10; k++) { const r = k % 2 ? s * 0.14 : s * 0.34, t = -Math.PI / 2 + k * Math.PI / 5; c.lineTo(Math.cos(t) * r, Math.sin(t) * r); }
+        c.closePath(); c.fill(); c.stroke();
+        break;
+      }
+    }
+    c.strokeRect(-h, -h, s, s);
+  }
+
+  function makeIcon(size) {
+    const p = '#ff8a1f', s = '#ffffff', pat = 'circle', glow = null;
+    const pad = Math.ceil(size * 0.35);
+    const oc = document.createElement('canvas');
+    oc.width = oc.height = (size + pad * 2) * dpr;
+    const c = oc.getContext('2d');
+    c.scale(dpr, dpr);
+    c.translate(size / 2 + pad, size / 2 + pad);
+    c._p = p; c._s = s; c._pat = pat;
+    if (glow) { c.shadowColor = glow; c.shadowBlur = size * 0.35; c.fillStyle = glow; c.fillRect(-size / 2, -size / 2, size, size); c.shadowBlur = 0; }
+    drawFace(c, size);
+    return { img: oc, pad };
+  }
+
+  function spawn(x) {
+    const size = Math.round(Math.min(W, H) * (0.07 + Math.random() * 0.05)) + 14;
+    const icon = makeIcon(size);
+    cubes.push({
+      x: x ?? size + Math.random() * (W - size * 2),
+      y: -size - Math.random() * 60,
+      vx: (Math.random() - 0.5) * 120,
+      vy: 0,
+      rot: 0, targetRot: Math.PI / 2 * Math.floor(Math.random() * 4),
+      size, ...icon,
+      grounded: false,
+      nextJump: 0.6 + Math.random() * 2.5,
+      pop: 0,
+    });
+    if (cubes.length > 250) cubes.shift();
+    countEl.textContent = cubes.length;
+    hint.hidden = true;
+  }
+
+  function jump(c) {
+    c.vy = -(380 + Math.random() * 220);
+    c.vx = (Math.random() - 0.5) * 220;
+    c.grounded = false;
+    c.targetRot += (c.vx >= 0 ? 1 : -1) * Math.PI / 2 * (Math.random() < 0.3 ? 2 : 1);
+  }
+
+  document.getElementById('spawn').addEventListener('click', () => spawn());
+  document.getElementById('rain').addEventListener('click', () => { for (let k = 0; k < 10; k++) setTimeout(() => spawn(), k * 70); });
+  document.getElementById('clear').addEventListener('click', () => { cubes.length = 0; countEl.textContent = 0; hint.hidden = false; });
+  canvas.addEventListener('pointerdown', e => {
+    const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+    for (let k = cubes.length - 1; k >= 0; k--) {
+      const c = cubes[k];
+      if (Math.abs(px - c.x) < c.size / 2 + 6 && Math.abs(py - c.y) < c.size / 2 + 6) { jump(c); c.pop = 1; return; }
+    }
+    spawn(px);
+  });
+
+  // ---- background ----
+  let scroll = 0;
+  function drawBg(dt) {
+    ctx.fillStyle = '#2b2f36'; ctx.fillRect(0, 0, W, floorY);
+    ctx.fillStyle = '#1e2126'; ctx.fillRect(0, floorY, W, H - floorY);
+    ctx.fillStyle = '#4a505a'; ctx.fillRect(0, floorY - 1, W, 2);
+  }
+
+  // ---- loop ----
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000); last = now;
+    drawBg(dt);
+    for (const c of cubes) {
+      const h = c.size / 2;
+      if (!c.grounded) {
+        c.vy += 1500 * dt;
+        c.x += c.vx * dt; c.y += c.vy * dt;
+        if (c.x < h) { c.x = h; c.vx = Math.abs(c.vx); }
+        if (c.x > W - h) { c.x = W - h; c.vx = -Math.abs(c.vx); }
+        if (c.y >= floorY - h) { c.y = floorY - h; c.vy = 0; c.vx = 0; c.grounded = true; c.nextJump = 0.8 + Math.random() * 3; }
+      } else if (!reduce) {
+        c.y = floorY - h;
+        c.nextJump -= dt;
+        if (c.nextJump <= 0) jump(c);
+      }
+      c.rot += (c.targetRot - c.rot) * Math.min(1, dt * 10);
+      c.pop = Math.max(0, c.pop - dt * 4);
+      const sc = 1 + c.pop * 0.15;
+      ctx.save();
+      ctx.translate(c.x, c.y); ctx.rotate(c.rot); ctx.scale(sc, sc);
+      const full = c.size + c.pad * 2;
+      ctx.drawImage(c.img, -full / 2, -full / 2, full, full);
+      ctx.restore();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // start with a few on screen
+  for (let k = 0; k < 4; k++) spawn();
+})();
+</script>
+</body>
+</html>
